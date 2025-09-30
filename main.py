@@ -5,17 +5,17 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QListWidget, QLineEdit, QFrame, QFileDialog,
     QSlider, QColorDialog, QFontComboBox, QSpinBox, QGridLayout, QFormLayout,
-    QMessageBox
+    QMessageBox, QSizePolicy  # NEW: 导入 QSizePolicy
 )
-from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
+from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QScreen
 from PyQt6.QtCore import Qt
 
 class MainWindow(QMainWindow):
     def __init__(self):
+        # ... __init__ 和 init_ui_size() 保持不变 ...
         super().__init__()
-        # ... (这部分代码没有变化) ...
         self.setWindowTitle("图片加水印工具 WatermarkApp")
-        self.setGeometry(100, 100, 1200, 700) 
+        self.init_ui_size()
         self.current_image_path = None
         self.original_pixmap = None
         self.watermark_text = "© Your Name"
@@ -33,7 +33,23 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(right_panel, 2)
         self.update_color_preview()
 
-    # ... create_left_panel 无变化 ...
+    def init_ui_size(self):
+        screen = QApplication.primaryScreen()
+        if not screen:
+            self.setGeometry(100, 100, 1200, 700)
+            return
+        available_size = screen.availableGeometry()
+        DEFAULT_WIDTH = 1280
+        DEFAULT_HEIGHT = 720
+        initial_width = min(DEFAULT_WIDTH, int(available_size.width() * 0.9))
+        initial_height = min(DEFAULT_HEIGHT, int(available_size.height() * 0.9))
+        self.resize(initial_width, initial_height)
+        frame_geom = self.frameGeometry()
+        center_point = available_size.center()
+        frame_geom.moveCenter(center_point)
+        self.move(frame_geom.topLeft())
+
+    # ... create_left_panel 保持不变 ...
     def create_left_panel(self):
         left_frame = QFrame()
         left_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -53,22 +69,25 @@ class MainWindow(QMainWindow):
         self.image_list_widget.currentItemChanged.connect(self.on_current_item_changed)
         return left_frame
 
-    # --- MODIFIED: 关键修改点 1 ---
+    # --- MODIFIED: 这是本次修复的唯一修改点 ---
     def create_center_panel(self):
         center_frame = QFrame()
         center_frame.setFrameShape(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(center_frame)
         self.preview_label = QLabel("图片预览区")
-        
-        # --- NEW: 告诉 QLabel 自动缩放其内容以填充可用空间 ---
-        self.preview_label.setScaledContents(True) 
-        
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet("border: 2px dashed #aaa;")
+        
+        # 保留之前的修复
+        self.preview_label.setScaledContents(True) 
+        
+        # --- NEW: 添加这一行，强制 QLabel 服从布局约束 ---
+        self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+
         layout.addWidget(self.preview_label)
         return center_frame
 
-    # ... create_right_panel 无变化 ...
+    # ... 其他所有方法都没有变化 ...
     def create_right_panel(self):
         right_frame = QFrame()
         right_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -123,8 +142,6 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(self.export_images)
         main_layout.addWidget(self.btn_export)
         return right_frame
-
-    # ... 其他槽函数无变化 ...
     def on_text_changed(self, text): self.watermark_text = text; self.update_display()
     def on_font_changed(self, font): self.watermark_font.setFamily(font.family()); self.update_display()
     def on_font_size_changed(self, size): self.watermark_font.setPointSize(size); self.update_display()
@@ -151,7 +168,7 @@ class MainWindow(QMainWindow):
     def open_image_folder(self, *args, **kwargs): print("导入文件夹功能待实现")
     def on_current_item_changed(self, current_item, previous_item):
         if current_item is None:
-            self.preview_label.clear() # clear() is better than setText() here
+            self.preview_label.clear()
             self.preview_label.setText("图片预览区")
             self.current_image_path = None
             self.original_pixmap = None
@@ -184,24 +201,10 @@ class MainWindow(QMainWindow):
         painter.drawText(x, y, self.watermark_text)
         painter.end()
         return watermarked_pixmap
-    
-    # --- MODIFIED: 关键修改点 2 ---
     def update_display(self):
         if self.original_pixmap is None: return
-        
-        # 1. 应用水印 (这一步不变)
         pixmap_with_watermark = self.apply_watermark(self.original_pixmap)
-        
-        # 2. 直接将完整的、未经缩放的 pixmap 设置给 label
-        #    因为我们设置了 setScaledContents(True)，label 会自动处理缩放
         self.preview_label.setPixmap(pixmap_with_watermark)
-
-    # --- REMOVED: 关键修改点 3 ---
-    # resizeEvent 不再需要，可以安全删除
-    # def resizeEvent(self, event):
-    #     super().resizeEvent(event)
-    #     self.update_display()
-        
     def export_images(self):
         if self.image_list_widget.count() == 0:
             QMessageBox.warning(self, "没有图片", "请先导入图片后再执行导出操作。")
