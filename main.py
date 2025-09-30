@@ -1,5 +1,6 @@
 import sys
 import os
+import json
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
@@ -10,7 +11,6 @@ from PyQt6.QtWidgets import (
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QScreen
 from PyQt6.QtCore import Qt, pyqtSignal, QPoint, QRectF
 
-# --- 创建一个可交互的 QLabel 子类来处理鼠标事件 ---
 class InteractiveLabel(QLabel):
     mouse_drag_signal = pyqtSignal(int, int)
 
@@ -41,31 +41,24 @@ class MainWindow(QMainWindow):
         self.setWindowTitle("图片加水印工具 WatermarkApp")
         self.init_ui_size()
 
+        self.settings_file = "settings.json"
+
         self.current_image_path = None
         self.original_pixmap = None
         self.SUPPORTED_FORMATS = ('.jpg', '.jpeg', '.png', '.bmp', '.tiff')
 
-        # 水印通用设置
+        # 设置所有状态变量的默认值
         self.watermark_position = (Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
         self.watermark_offset = QPoint(0, 0)
-        self.watermark_rotation = 0 # NEW: 旋转角度
-        
-        # 模式选择
+        self.watermark_rotation = 0
         self.watermark_mode = "text"
-
-        # 文本水印状态变量
         self.text_watermark_text = "© Your Name"
         self.text_watermark_font = QFont("Arial", 32)
-
         self.text_watermark_color = QColor(255, 255, 255, 128)
-
-        # 图片水印状态变量
         self.image_watermark_pixmap = None
         self.image_watermark_path = ""
         self.image_watermark_opacity = 0.5
         self.image_watermark_scale = 15
-
-        # 导出设置的状态变量
         self.export_naming_mode = "suffix"
         self.export_naming_text = "_watermarked"
         self.export_format = "PNG"
@@ -83,10 +76,121 @@ class MainWindow(QMainWindow):
         main_layout.addWidget(center_panel, 3)
         main_layout.addWidget(right_panel, 2)
 
-        self.update_color_preview()
-        self.on_format_changed()
-        self.on_watermark_mode_changed()
+        self.load_settings()
 
+    def closeEvent(self, event):
+        self.save_settings()
+        event.accept()
+
+    def save_settings(self):
+        settings = {
+            "watermark_mode": self.watermark_mode,
+            "text_watermark": {
+                "text": self.text_watermark_text,
+                "font_family": self.text_watermark_font.family(),
+                "font_size": self.text_watermark_font.pointSize(),
+                "font_bold": self.text_watermark_font.bold(),
+                "font_italic": self.text_watermark_font.italic(),
+                "color_hex_argb": self.text_watermark_color.name(QColor.NameFormat.HexArgb),
+            },
+            "image_watermark": {
+                "path": self.image_watermark_path,
+                "opacity": self.image_watermark_opacity,
+                "scale": self.image_watermark_scale,
+            },
+            "general": {
+                "position_flag": int(self.watermark_position),
+                "rotation": self.watermark_rotation,
+            },
+            "export": {
+                "naming_mode": self.export_naming_mode,
+                "naming_text": self.export_naming_text,
+                "format": self.export_format,
+                "jpeg_quality": self.export_jpeg_quality,
+            }
+        }
+        try:
+            with open(self.settings_file, 'w') as f:
+                json.dump(settings, f, indent=4)
+        except Exception as e:
+            print(f"无法保存设置: {e}")
+
+    def load_settings(self):
+        if not os.path.exists(self.settings_file):
+            self.update_ui_from_settings()
+            return
+        
+        try:
+            with open(self.settings_file, 'r') as f:
+                settings = json.load(f)
+
+            self.watermark_mode = settings.get("watermark_mode", self.watermark_mode)
+            
+            text_settings = settings.get("text_watermark", {})
+            self.text_watermark_text = text_settings.get("text", self.text_watermark_text)
+            self.text_watermark_font = QFont(
+                text_settings.get("font_family", self.text_watermark_font.family()),
+                text_settings.get("font_size", self.text_watermark_font.pointSize())
+            )
+            self.text_watermark_font.setBold(text_settings.get("font_bold", self.text_watermark_font.bold()))
+            self.text_watermark_font.setItalic(text_settings.get("font_italic", self.text_watermark_font.italic()))
+            self.text_watermark_color = QColor(text_settings.get("color_hex_argb", self.text_watermark_color.name(QColor.NameFormat.HexArgb)))
+
+            image_settings = settings.get("image_watermark", {})
+            self.image_watermark_path = image_settings.get("path", self.image_watermark_path)
+            if self.image_watermark_path and os.path.exists(self.image_watermark_path):
+                self.image_watermark_pixmap = QPixmap(self.image_watermark_path)
+            self.image_watermark_opacity = image_settings.get("opacity", self.image_watermark_opacity)
+            self.image_watermark_scale = image_settings.get("scale", self.image_watermark_scale)
+
+            general_settings = settings.get("general", {})
+            self.watermark_position = Qt.AlignmentFlag(general_settings.get("position_flag", int(self.watermark_position)))
+            self.watermark_rotation = general_settings.get("rotation", self.watermark_rotation)
+
+            export_settings = settings.get("export", {})
+            self.export_naming_mode = export_settings.get("naming_mode", self.export_naming_mode)
+            self.export_naming_text = export_settings.get("naming_text", self.export_naming_text)
+            self.export_format = export_settings.get("format", self.export_format)
+            self.export_jpeg_quality = export_settings.get("jpeg_quality", self.export_jpeg_quality)
+
+        except Exception as e:
+            print(f"无法加载设置: {e}")
+        
+        self.update_ui_from_settings()
+
+    def update_ui_from_settings(self):
+        self.radio_mode_text.setChecked(self.watermark_mode == "text")
+        self.radio_mode_image.setChecked(self.watermark_mode == "image")
+
+        self.watermark_text_input.setText(self.text_watermark_text)
+        self.font_combo.setCurrentFont(self.text_watermark_font)
+        self.check_bold.setChecked(self.text_watermark_font.bold())
+        self.check_italic.setChecked(self.text_watermark_font.italic())
+        self.font_size_spinbox.setValue(self.text_watermark_font.pointSize())
+        self.opacity_slider.setValue(self.text_watermark_color.alpha())
+        self.update_color_preview()
+
+        if self.image_watermark_pixmap and not self.image_watermark_pixmap.isNull():
+            self.image_path_label.setText(os.path.basename(self.image_watermark_path))
+        else:
+            self.image_path_label.setText("未选择图片")
+        self.image_scale_slider.setValue(self.image_watermark_scale)
+        self.image_opacity_slider.setValue(int(self.image_watermark_opacity * 100))
+
+        self.rotation_slider.setValue(self.watermark_rotation)
+
+        if self.export_naming_mode == "suffix": self.radio_name_suffix.setChecked(True)
+        elif self.export_naming_mode == "prefix": self.radio_name_prefix.setChecked(True)
+        else: self.radio_name_original.setChecked(True)
+        self.export_naming_input.setText(self.export_naming_text)
+        self.radio_format_png.setChecked(self.export_format == "PNG")
+        self.radio_format_jpeg.setChecked(self.export_format == "JPEG")
+        self.jpeg_quality_slider.setValue(self.export_jpeg_quality)
+        
+        self.on_watermark_mode_changed()
+        self.on_format_changed()
+        self.on_naming_changed()
+        
     def init_ui_size(self):
         screen = QApplication.primaryScreen()
         if not screen:
@@ -101,7 +205,7 @@ class MainWindow(QMainWindow):
         center_point = available_size.center()
         frame_geom.moveCenter(center_point)
         self.move(frame_geom.topLeft())
-
+    
     def create_left_panel(self):
         left_frame = QFrame()
         left_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -120,7 +224,7 @@ class MainWindow(QMainWindow):
         self.btn_import_folder.clicked.connect(self.open_image_folder)
         self.image_list_widget.currentItemChanged.connect(self.on_current_item_changed)
         return left_frame
-
+    
     def create_center_panel(self):
         center_frame = QFrame()
         center_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -132,7 +236,7 @@ class MainWindow(QMainWindow):
         self.preview_label.mouse_drag_signal.connect(self.on_watermark_drag)
         layout.addWidget(self.preview_label)
         return center_frame
-
+    
     def create_right_panel(self):
         right_frame = QFrame()
         right_frame.setFrameShape(QFrame.Shape.StyledPanel)
@@ -159,7 +263,6 @@ class MainWindow(QMainWindow):
         self.font_combo.currentFontChanged.connect(self.on_font_changed)
         text_form_layout.addRow("字体:", self.font_combo)
         
-        # NEW: 粗体和斜体复选框
         style_layout = QHBoxLayout()
         self.check_bold = QCheckBox("粗体")
         self.check_italic = QCheckBox("斜体")
@@ -229,8 +332,7 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda _, p=pos: self.set_grid_position(p))
             position_grid.addWidget(btn, row, col)
         position_layout.addLayout(position_grid)
-
-        # NEW: 旋转控制
+        
         rotation_layout = QHBoxLayout()
         self.rotation_label = QLabel(f"旋转: {self.watermark_rotation}°")
         self.rotation_slider = QSlider(Qt.Orientation.Horizontal)
@@ -243,7 +345,7 @@ class MainWindow(QMainWindow):
         rotation_layout.addWidget(self.rotation_slider)
         rotation_layout.addWidget(btn_reset_rotation)
         position_layout.addLayout(rotation_layout)
-
+        
         position_group.setLayout(position_layout)
         main_layout.addWidget(position_group)
 
@@ -292,17 +394,17 @@ class MainWindow(QMainWindow):
         self.btn_export.clicked.connect(self.export_images)
         main_layout.addWidget(self.btn_export)
         return right_frame
-
+    
     def on_watermark_mode_changed(self):
         self.watermark_mode = "image" if self.radio_mode_image.isChecked() else "text"
         self.text_watermark_group.setVisible(self.watermark_mode == "text")
         self.image_watermark_group.setVisible(self.watermark_mode == "image")
         self.update_display()
-
+    
     def on_text_changed(self, text):
         self.text_watermark_text = text
         self.update_display()
-
+    
     def on_font_changed(self, font):
         self.text_watermark_font.setFamily(font.family())
         self.update_display()
@@ -313,7 +415,7 @@ class MainWindow(QMainWindow):
         self.text_watermark_font.setBold(is_bold)
         self.text_watermark_font.setItalic(is_italic)
         self.update_display()
-
+    
     def on_font_size_changed(self, size):
         self.text_watermark_font.setPointSize(size)
         self.update_display()
@@ -326,12 +428,12 @@ class MainWindow(QMainWindow):
             self.text_watermark_color = color
             self.update_color_preview()
             self.update_display()
-
+    
     def on_opacity_changed(self, value):
         self.text_watermark_color.setAlpha(value)
         self.update_color_preview()
         self.update_display()
-
+    
     def on_select_image_watermark(self):
         file_path, _ = QFileDialog.getOpenFileName(self, "选择水印图片", "", "图片文件 (*.png *.jpg *.jpeg)")
         if file_path:
@@ -362,7 +464,7 @@ class MainWindow(QMainWindow):
     
     def on_rotation_reset(self):
         self.rotation_slider.setValue(0)
-
+    
     def set_grid_position(self, position):
         self.watermark_position = position
         self.watermark_offset = QPoint(0, 0)
@@ -428,14 +530,13 @@ class MainWindow(QMainWindow):
         self.update_display()
 
     def apply_watermark(self, pixmap):
-        if pixmap.isNull(): return pixmap
+        if pixmap.isNull():
+            return pixmap
         watermarked_pixmap = pixmap.copy()
         painter = QPainter(watermarked_pixmap)
         padding = 10
         base_x, base_y = 0, 0
-
-        painter.save() # 保存 painter 状态
-
+        painter.save()
         try:
             if self.watermark_mode == "text":
                 painter.setFont(self.text_watermark_font)
@@ -443,54 +544,42 @@ class MainWindow(QMainWindow):
                 metrics = painter.fontMetrics()
                 text_rect = metrics.boundingRect(QRectF(), Qt.AlignmentFlag.AlignCenter, self.text_watermark_text)
                 text_width, text_height = text_rect.width(), text_rect.height()
-                
                 if self.watermark_position & Qt.AlignmentFlag.AlignLeft: base_x = padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignRight: base_x = pixmap.width() - text_width - padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignHCenter: base_x = (pixmap.width() - text_width) // 2
                 if self.watermark_position & Qt.AlignmentFlag.AlignTop: base_y = padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignBottom: base_y = pixmap.height() - text_height - padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignVCenter: base_y = (pixmap.height() - text_height) // 2
-                
-                final_x = base_x + self.watermark_offset.x()
-                final_y = base_y + self.watermark_offset.y()
-
-                center_x = final_x + text_width / 2
-                center_y = final_y + text_height / 2
-
+                final_x, final_y = base_x + self.watermark_offset.x(), base_y + self.watermark_offset.y()
+                center_x, center_y = final_x + text_width / 2, final_y + text_height / 2
                 painter.translate(center_x, center_y)
                 painter.rotate(self.watermark_rotation)
                 painter.drawText(int(-text_width/2), int(text_height/2 - metrics.descent()), self.text_watermark_text)
-
             elif self.watermark_mode == "image" and self.image_watermark_pixmap:
                 wm_target_width = int(pixmap.width() * self.image_watermark_scale / 100)
                 scaled_wm = self.image_watermark_pixmap.scaledToWidth(wm_target_width, Qt.TransformationMode.SmoothTransformation)
                 wm_width, wm_height = scaled_wm.width(), scaled_wm.height()
-                
                 if self.watermark_position & Qt.AlignmentFlag.AlignLeft: base_x = padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignRight: base_x = pixmap.width() - wm_width - padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignHCenter: base_x = (pixmap.width() - wm_width) // 2
                 if self.watermark_position & Qt.AlignmentFlag.AlignTop: base_y = padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignBottom: base_y = pixmap.height() - wm_height - padding
                 elif self.watermark_position & Qt.AlignmentFlag.AlignVCenter: base_y = (pixmap.height() - wm_height) // 2
-
-                final_x = base_x + self.watermark_offset.x()
-                final_y = base_y + self.watermark_offset.y()
-
-                center_x = final_x + wm_width / 2
-                center_y = final_y + wm_height / 2
-                
+                final_x, final_y = base_x + self.watermark_offset.x(), base_y + self.watermark_offset.y()
+                center_x, center_y = final_x + wm_width / 2, final_y + wm_height / 2
                 painter.setOpacity(self.image_watermark_opacity)
                 painter.translate(center_x, center_y)
                 painter.rotate(self.watermark_rotation)
                 painter.drawPixmap(int(-wm_width/2), int(-wm_height/2), scaled_wm)
         finally:
-            painter.restore() # 恢复 painter 状态
-
+            painter.restore()
         return watermarked_pixmap
 
     def update_display(self):
         if self.original_pixmap is None:
-            self.preview_label.clear(); self.preview_label.setText("图片预览区"); return
+            self.preview_label.clear()
+            self.preview_label.setText("图片预览区")
+            return
         pixmap_with_watermark = self.apply_watermark(self.original_pixmap)
         scaled_pixmap = pixmap_with_watermark.scaled(self.preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.preview_label.setPixmap(scaled_pixmap)
@@ -520,12 +609,14 @@ class MainWindow(QMainWindow):
         
     def export_images(self):
         if self.image_list_widget.count() == 0:
-            QMessageBox.warning(self, "没有图片", "请先导入图片后再执行导出操作。"); return
+            QMessageBox.warning(self, "没有图片", "请先导入图片后再执行导出操作。")
+            return
         output_dir = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
         if not output_dir: return
         input_dirs = set(os.path.dirname(self.image_list_widget.item(i).text()) for i in range(self.image_list_widget.count()))
         if output_dir in input_dirs:
-            QMessageBox.critical(self, "错误", "不能选择原始图片所在的文件夹作为导出目录，以防覆盖原图！"); return
+            QMessageBox.critical(self, "错误", "不能选择原始图片所在的文件夹作为导出目录，以防覆盖原图！")
+            return
         
         exported_count = 0
         for i in range(self.image_list_widget.count()):
@@ -534,19 +625,23 @@ class MainWindow(QMainWindow):
                 pixmap = QPixmap(original_path)
                 if pixmap.isNull(): continue
                 watermarked_pixmap = self.apply_watermark(pixmap)
-                base_name = os.path.basename(original_path); file_name, _ = os.path.splitext(base_name)
-                new_file_name = ""
+                base_name = os.path.basename(original_path)
+                file_name, _ = os.path.splitext(base_name)
+                
                 if self.export_naming_mode == "suffix": new_file_name = file_name + self.export_naming_text
                 elif self.export_naming_mode == "prefix": new_file_name = self.export_naming_text + file_name
                 else: new_file_name = file_name
+
                 save_format_upper = self.export_format.upper()
                 file_ext = "." + self.export_format.lower()
                 quality = self.export_jpeg_quality if save_format_upper == "JPEG" else -1
+                
                 output_path = os.path.join(output_dir, new_file_name + file_ext)
                 if watermarked_pixmap.save(output_path, save_format_upper, quality):
                     exported_count += 1
                 else:
                     print(f"保存失败: {output_path}")
+
             except Exception as e:
                 print(f"处理文件时发生错误 {original_path}: {e}")
         
