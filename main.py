@@ -8,7 +8,33 @@ from PyQt6.QtWidgets import (
     QMessageBox, QSizePolicy, QGroupBox, QRadioButton
 )
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont, QScreen
-from PyQt6.QtCore import Qt
+from PyQt6.QtCore import Qt, pyqtSignal, QPoint
+
+# --- 创建一个可交互的 QLabel 子类来处理鼠标事件 ---
+class InteractiveLabel(QLabel):
+    # 定义一个新的信号，它会在鼠标拖拽时发出 x 和 y 的位移
+    mouse_drag_signal = pyqtSignal(int, int)
+
+    def __init__(self, parent=None):
+        super().__init__(parent)
+        self.is_dragging = False
+        self.last_pos = None
+
+    def mousePressEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.is_dragging = True
+            self.last_pos = event.pos()
+
+    def mouseMoveEvent(self, event):
+        if self.is_dragging:
+            delta = event.pos() - self.last_pos
+            self.last_pos = event.pos()
+            self.mouse_drag_signal.emit(delta.x(), delta.y())
+
+    def mouseReleaseEvent(self, event):
+        if event.button() == Qt.MouseButton.LeftButton:
+            self.is_dragging = False
+            self.last_pos = None
 
 class MainWindow(QMainWindow):
     def __init__(self):
@@ -22,6 +48,7 @@ class MainWindow(QMainWindow):
 
         # 水印通用设置
         self.watermark_position = (Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
+        self.watermark_offset = QPoint(0, 0) # 手动拖拽的偏移量
         
         # 模式选择
         self.watermark_mode = "text"  # "text" or "image"
@@ -34,8 +61,8 @@ class MainWindow(QMainWindow):
         # 图片水印状态变量
         self.image_watermark_pixmap = None
         self.image_watermark_path = ""
-        self.image_watermark_opacity = 0.5  # 0.0 to 1.0
-        self.image_watermark_scale = 15     # % of the main image width
+        self.image_watermark_opacity = 0.5
+        self.image_watermark_scale = 15
 
         # 导出设置的状态变量
         self.export_naming_mode = "suffix"
@@ -57,7 +84,7 @@ class MainWindow(QMainWindow):
 
         self.update_color_preview()
         self.on_format_changed()
-        self.on_watermark_mode_changed() # 初始化UI状态
+        self.on_watermark_mode_changed()
 
     def init_ui_size(self):
         screen = QApplication.primaryScreen()
@@ -97,10 +124,16 @@ class MainWindow(QMainWindow):
         center_frame = QFrame()
         center_frame.setFrameShape(QFrame.Shape.StyledPanel)
         layout = QVBoxLayout(center_frame)
-        self.preview_label = QLabel("图片预览区")
+        
+        # 使用我们自定义的 InteractiveLabel
+        self.preview_label = InteractiveLabel("图片预览区")
         self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self.preview_label.setStyleSheet("border: 2px dashed #aaa;")
         self.preview_label.setSizePolicy(QSizePolicy.Policy.Ignored, QSizePolicy.Policy.Ignored)
+        
+        # 连接自定义信号到槽函数
+        self.preview_label.mouse_drag_signal.connect(self.on_watermark_drag)
+
         layout.addWidget(self.preview_label)
         return center_frame
 
@@ -190,7 +223,7 @@ class MainWindow(QMainWindow):
         for i, (pos, text) in enumerate(positions):
             row, col = i // 3, i % 3
             btn = QPushButton(text)
-            btn.clicked.connect(lambda _, p=pos: self.on_position_changed(p))
+            btn.clicked.connect(lambda _, p=pos: self.set_grid_position(p))
             position_grid.addWidget(btn, row, col)
         position_layout.addLayout(position_grid)
         position_group.setLayout(position_layout)
@@ -202,29 +235,44 @@ class MainWindow(QMainWindow):
         export_group = QGroupBox("导出设置")
         export_layout = QVBoxLayout()
         naming_layout = QFormLayout()
-        self.radio_name_suffix = QRadioButton("添加后缀"); self.radio_name_suffix.setChecked(True)
-        self.radio_name_prefix = QRadioButton("添加前缀"); self.radio_name_original = QRadioButton("保留原名")
+        self.radio_name_suffix = QRadioButton("添加后缀")
+        self.radio_name_suffix.setChecked(True)
+        self.radio_name_prefix = QRadioButton("添加前缀")
+        self.radio_name_original = QRadioButton("保留原名")
         self.export_naming_input = QLineEdit(self.export_naming_text)
-        self.radio_name_suffix.toggled.connect(self.on_naming_changed); self.radio_name_prefix.toggled.connect(self.on_naming_changed); self.radio_name_original.toggled.connect(self.on_naming_changed)
+        self.radio_name_suffix.toggled.connect(self.on_naming_changed)
+        self.radio_name_prefix.toggled.connect(self.on_naming_changed)
+        self.radio_name_original.toggled.connect(self.on_naming_changed)
         self.export_naming_input.textChanged.connect(self.on_naming_text_changed)
-        naming_layout.addRow(self.radio_name_suffix, self.export_naming_input); naming_layout.addRow(self.radio_name_prefix); naming_layout.addRow(self.radio_name_original)
+        naming_layout.addRow(self.radio_name_suffix, self.export_naming_input)
+        naming_layout.addRow(self.radio_name_prefix)
+        naming_layout.addRow(self.radio_name_original)
         export_layout.addLayout(naming_layout)
         format_layout = QHBoxLayout()
-        self.radio_format_png = QRadioButton("PNG (推荐)"); self.radio_format_png.setChecked(True)
-        self.radio_format_jpeg = QRadioButton("JPEG"); self.radio_format_png.toggled.connect(self.on_format_changed)
-        format_layout.addWidget(QLabel("格式:")); format_layout.addWidget(self.radio_format_png); format_layout.addWidget(self.radio_format_jpeg)
+        self.radio_format_png = QRadioButton("PNG (推荐)")
+        self.radio_format_png.setChecked(True)
+        self.radio_format_jpeg = QRadioButton("JPEG")
+        self.radio_format_png.toggled.connect(self.on_format_changed)
+        format_layout.addWidget(QLabel("格式:"))
+        format_layout.addWidget(self.radio_format_png)
+        format_layout.addWidget(self.radio_format_jpeg)
         export_layout.addLayout(format_layout)
         self.jpeg_quality_widget = QWidget()
-        jpeg_layout = QHBoxLayout(self.jpeg_quality_widget); jpeg_layout.setContentsMargins(0, 0, 0, 0)
+        jpeg_layout = QHBoxLayout(self.jpeg_quality_widget)
+        jpeg_layout.setContentsMargins(0, 0, 0, 0)
         self.jpeg_quality_label = QLabel(f"质量: {self.export_jpeg_quality}")
-        self.jpeg_quality_slider = QSlider(Qt.Orientation.Horizontal); self.jpeg_quality_slider.setRange(0, 100); self.jpeg_quality_slider.setValue(self.export_jpeg_quality)
+        self.jpeg_quality_slider = QSlider(Qt.Orientation.Horizontal)
+        self.jpeg_quality_slider.setRange(0, 100)
+        self.jpeg_quality_slider.setValue(self.export_jpeg_quality)
         self.jpeg_quality_slider.valueChanged.connect(self.on_jpeg_quality_changed)
-        jpeg_layout.addWidget(self.jpeg_quality_label); jpeg_layout.addWidget(self.jpeg_quality_slider)
+        jpeg_layout.addWidget(self.jpeg_quality_label)
+        jpeg_layout.addWidget(self.jpeg_quality_slider)
         export_layout.addWidget(self.jpeg_quality_widget)
         export_group.setLayout(export_layout)
         main_layout.addWidget(export_group)
 
-        self.btn_export = QPushButton("导出所有图片"); self.btn_export.clicked.connect(self.export_images)
+        self.btn_export = QPushButton("导出所有图片")
+        self.btn_export.clicked.connect(self.export_images)
         main_layout.addWidget(self.btn_export)
         return right_frame
 
@@ -283,8 +331,25 @@ class MainWindow(QMainWindow):
         self.image_opacity_label.setText(f"透明度: {value}%")
         self.update_display()
 
-    def on_position_changed(self, position):
+    def set_grid_position(self, position):
         self.watermark_position = position
+        self.watermark_offset = QPoint(0, 0)
+        self.update_display()
+    
+    def on_watermark_drag(self, dx, dy):
+        if self.original_pixmap is None or self.preview_label.pixmap() is None or self.preview_label.pixmap().isNull():
+            return
+        
+        scaled_pixmap_size = self.preview_label.pixmap().size()
+        original_pixmap_size = self.original_pixmap.size()
+        
+        if scaled_pixmap_size.width() == 0 or scaled_pixmap_size.height() == 0:
+            return
+
+        scale_ratio_x = original_pixmap_size.width() / scaled_pixmap_size.width()
+        scale_ratio_y = original_pixmap_size.height() / scaled_pixmap_size.height()
+
+        self.watermark_offset += QPoint(int(dx * scale_ratio_x), int(dy * scale_ratio_y))
         self.update_display()
 
     def update_color_preview(self):
@@ -315,13 +380,20 @@ class MainWindow(QMainWindow):
 
     def on_current_item_changed(self, current_item, previous_item):
         if current_item is None:
-            self.preview_label.clear(); self.preview_label.setText("图片预览区")
-            self.current_image_path = None; self.original_pixmap = None; return
+            self.preview_label.clear()
+            self.preview_label.setText("图片预览区")
+            self.current_image_path = None
+            self.original_pixmap = None
+            return
         self.current_image_path = current_item.text()
         self.original_pixmap = QPixmap(self.current_image_path)
         if self.original_pixmap.isNull():
-            self.preview_label.clear(); self.preview_label.setText("无法加载图片")
-            self.original_pixmap = None; return
+            self.preview_label.clear()
+            self.preview_label.setText("无法加载图片")
+            self.original_pixmap = None
+            return
+        # 当切换图片时，重置拖拽偏移量
+        self.watermark_offset = QPoint(0, 0)
         self.update_display()
 
     def apply_watermark(self, pixmap):
@@ -329,6 +401,7 @@ class MainWindow(QMainWindow):
         watermarked_pixmap = pixmap.copy()
         painter = QPainter(watermarked_pixmap)
         padding = 10
+        base_x, base_y = 0, 0
 
         if self.watermark_mode == "text":
             painter.setFont(self.text_watermark_font)
@@ -337,38 +410,42 @@ class MainWindow(QMainWindow):
             text_width = metrics.horizontalAdvance(self.text_watermark_text)
             text_height = metrics.height()
             
-            x, y = 0, 0
-            if self.watermark_position & Qt.AlignmentFlag.AlignLeft: x = padding
-            elif self.watermark_position & Qt.AlignmentFlag.AlignRight: x = pixmap.width() - text_width - padding
-            elif self.watermark_position & Qt.AlignmentFlag.AlignHCenter: x = (pixmap.width() - text_width) // 2
-            if self.watermark_position & Qt.AlignmentFlag.AlignTop: y = padding + text_height
-            elif self.watermark_position & Qt.AlignmentFlag.AlignBottom: y = pixmap.height() - padding
-            elif self.watermark_position & Qt.AlignmentFlag.AlignVCenter: y = (pixmap.height() + text_height) // 2 - metrics.descent()
+            if self.watermark_position & Qt.AlignmentFlag.AlignLeft: base_x = padding
+            elif self.watermark_position & Qt.AlignmentFlag.AlignRight: base_x = pixmap.width() - text_width - padding
+            elif self.watermark_position & Qt.AlignmentFlag.AlignHCenter: base_x = (pixmap.width() - text_width) // 2
+            if self.watermark_position & Qt.AlignmentFlag.AlignTop: base_y = padding + text_height
+            elif self.watermark_position & Qt.AlignmentFlag.AlignBottom: base_y = pixmap.height() - padding
+            elif self.watermark_position & Qt.AlignmentFlag.AlignVCenter: base_y = (pixmap.height() + text_height) // 2 - metrics.descent()
             
-            painter.drawText(x, y, self.text_watermark_text)
+            final_x = base_x + self.watermark_offset.x()
+            final_y = base_y + self.watermark_offset.y()
+            painter.drawText(final_x, final_y, self.text_watermark_text)
 
         elif self.watermark_mode == "image" and self.image_watermark_pixmap:
             wm_target_width = int(pixmap.width() * self.image_watermark_scale / 100)
             scaled_wm = self.image_watermark_pixmap.scaledToWidth(wm_target_width, Qt.TransformationMode.SmoothTransformation)
             wm_width, wm_height = scaled_wm.width(), scaled_wm.height()
             
-            x, y = 0, 0
-            if self.watermark_position & Qt.AlignmentFlag.AlignLeft: x = padding
-            elif self.watermark_position & Qt.AlignmentFlag.AlignRight: x = pixmap.width() - wm_width - padding
-            elif self.watermark_position & Qt.AlignmentFlag.AlignHCenter: x = (pixmap.width() - wm_width) // 2
-            if self.watermark_position & Qt.AlignmentFlag.AlignTop: y = padding
-            elif self.watermark_position & Qt.AlignmentFlag.AlignBottom: y = pixmap.height() - wm_height - padding
-            elif self.watermark_position & Qt.AlignmentFlag.AlignVCenter: y = (pixmap.height() - wm_height) // 2
+            if self.watermark_position & Qt.AlignmentFlag.AlignLeft: base_x = padding
+            elif self.watermark_position & Qt.AlignmentFlag.AlignRight: base_x = pixmap.width() - wm_width - padding
+            elif self.watermark_position & Qt.AlignmentFlag.AlignHCenter: base_x = (pixmap.width() - wm_width) // 2
+            if self.watermark_position & Qt.AlignmentFlag.AlignTop: base_y = padding
+            elif self.watermark_position & Qt.AlignmentFlag.AlignBottom: base_y = pixmap.height() - wm_height - padding
+            elif self.watermark_position & Qt.AlignmentFlag.AlignVCenter: base_y = (pixmap.height() - wm_height) // 2
 
+            final_x = base_x + self.watermark_offset.x()
+            final_y = base_y + self.watermark_offset.y()
             painter.setOpacity(self.image_watermark_opacity)
-            painter.drawPixmap(x, y, scaled_wm)
+            painter.drawPixmap(final_x, final_y, scaled_wm)
 
         painter.end()
         return watermarked_pixmap
 
     def update_display(self):
         if self.original_pixmap is None:
-            self.preview_label.clear(); self.preview_label.setText("图片预览区"); return
+            self.preview_label.clear()
+            self.preview_label.setText("图片预览区")
+            return
         pixmap_with_watermark = self.apply_watermark(self.original_pixmap)
         scaled_pixmap = pixmap_with_watermark.scaled(self.preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation)
         self.preview_label.setPixmap(scaled_pixmap)
@@ -398,12 +475,14 @@ class MainWindow(QMainWindow):
         
     def export_images(self):
         if self.image_list_widget.count() == 0:
-            QMessageBox.warning(self, "没有图片", "请先导入图片后再执行导出操作。"); return
+            QMessageBox.warning(self, "没有图片", "请先导入图片后再执行导出操作。")
+            return
         output_dir = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
         if not output_dir: return
         input_dirs = set(os.path.dirname(self.image_list_widget.item(i).text()) for i in range(self.image_list_widget.count()))
         if output_dir in input_dirs:
-            QMessageBox.critical(self, "错误", "不能选择原始图片所在的文件夹作为导出目录，以防覆盖原图！"); return
+            QMessageBox.critical(self, "错误", "不能选择原始图片所在的文件夹作为导出目录，以防覆盖原图！")
+            return
         
         exported_count = 0
         for i in range(self.image_list_widget.count()):
@@ -412,19 +491,25 @@ class MainWindow(QMainWindow):
                 pixmap = QPixmap(original_path)
                 if pixmap.isNull(): continue
                 watermarked_pixmap = self.apply_watermark(pixmap)
-                base_name = os.path.basename(original_path); file_name, _ = os.path.splitext(base_name)
+                
+                base_name = os.path.basename(original_path)
+                file_name, _ = os.path.splitext(base_name)
+                
                 new_file_name = ""
                 if self.export_naming_mode == "suffix": new_file_name = file_name + self.export_naming_text
                 elif self.export_naming_mode == "prefix": new_file_name = self.export_naming_text + file_name
                 else: new_file_name = file_name
+
                 save_format_upper = self.export_format.upper()
                 file_ext = "." + self.export_format.lower()
                 quality = self.export_jpeg_quality if save_format_upper == "JPEG" else -1
+
                 output_path = os.path.join(output_dir, new_file_name + file_ext)
                 if watermarked_pixmap.save(output_path, save_format_upper, quality):
                     exported_count += 1
                 else:
                     print(f"保存失败: {output_path}")
+
             except Exception as e:
                 print(f"处理文件时发生错误 {original_path}: {e}")
         
