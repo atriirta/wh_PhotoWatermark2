@@ -1,11 +1,11 @@
 import sys
-import os # NEW: 导入 os 模块用于处理文件路径
+import os
 
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QHBoxLayout, QVBoxLayout,
     QPushButton, QLabel, QListWidget, QLineEdit, QFrame, QFileDialog,
     QSlider, QColorDialog, QFontComboBox, QSpinBox, QGridLayout, QFormLayout,
-    QMessageBox # NEW: 导入 QMessageBox 用于显示提示框
+    QMessageBox
 )
 from PyQt6.QtGui import QPixmap, QPainter, QColor, QFont
 from PyQt6.QtCore import Qt
@@ -13,41 +13,69 @@ from PyQt6.QtCore import Qt
 class MainWindow(QMainWindow):
     def __init__(self):
         super().__init__()
+        # ... (这部分代码没有变化) ...
         self.setWindowTitle("图片加水印工具 WatermarkApp")
         self.setGeometry(100, 100, 1200, 700) 
-
         self.current_image_path = None
         self.original_pixmap = None
-
         self.watermark_text = "© Your Name"
         self.watermark_font = QFont("Arial", 32)
         self.watermark_color = QColor(255, 255, 255, 128)
         self.watermark_position = (Qt.AlignmentFlag.AlignBottom | Qt.AlignmentFlag.AlignRight)
-
         central_widget = QWidget()
         self.setCentralWidget(central_widget)
         main_layout = QHBoxLayout(central_widget)
-
         left_panel = self.create_left_panel()
         center_panel = self.create_center_panel()
         right_panel = self.create_right_panel()
-
         main_layout.addWidget(left_panel, 1) 
         main_layout.addWidget(center_panel, 3)
         main_layout.addWidget(right_panel, 2)
-        
         self.update_color_preview()
 
+    # ... create_left_panel 无变化 ...
+    def create_left_panel(self):
+        left_frame = QFrame()
+        left_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        layout = QVBoxLayout(left_frame)
+        button_layout = QHBoxLayout()
+        self.btn_import_images = QPushButton("导入图片")
+        self.btn_import_folder = QPushButton("导入文件夹")
+        button_layout.addWidget(self.btn_import_images)
+        button_layout.addWidget(self.btn_import_folder)
+        list_label = QLabel("图片列表")
+        self.image_list_widget = QListWidget()
+        layout.addLayout(button_layout)
+        layout.addWidget(list_label)
+        layout.addWidget(self.image_list_widget)
+        self.btn_import_images.clicked.connect(self.open_image_files)
+        self.btn_import_folder.clicked.connect(self.open_image_folder)
+        self.image_list_widget.currentItemChanged.connect(self.on_current_item_changed)
+        return left_frame
+
+    # --- MODIFIED: 关键修改点 1 ---
+    def create_center_panel(self):
+        center_frame = QFrame()
+        center_frame.setFrameShape(QFrame.Shape.StyledPanel)
+        layout = QVBoxLayout(center_frame)
+        self.preview_label = QLabel("图片预览区")
+        
+        # --- NEW: 告诉 QLabel 自动缩放其内容以填充可用空间 ---
+        self.preview_label.setScaledContents(True) 
+        
+        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        self.preview_label.setStyleSheet("border: 2px dashed #aaa;")
+        layout.addWidget(self.preview_label)
+        return center_frame
+
+    # ... create_right_panel 无变化 ...
     def create_right_panel(self):
-        # ... (这部分代码有小修改) ...
         right_frame = QFrame()
         right_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        
         main_layout = QVBoxLayout(right_frame)
         settings_label = QLabel("水印设置")
         settings_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
         main_layout.addWidget(settings_label)
-
         form_layout = QFormLayout()
         self.watermark_text_input = QLineEdit(self.watermark_text)
         self.watermark_text_input.textChanged.connect(self.on_text_changed)
@@ -77,7 +105,6 @@ class MainWindow(QMainWindow):
         self.opacity_slider.valueChanged.connect(self.on_opacity_changed)
         form_layout.addRow("透明度:", self.opacity_slider)
         main_layout.addLayout(form_layout)
-        
         main_layout.addWidget(QLabel("位置:"))
         position_grid = QGridLayout()
         positions = [
@@ -91,107 +118,16 @@ class MainWindow(QMainWindow):
             btn.clicked.connect(lambda _, p=pos: self.on_position_changed(p))
             position_grid.addWidget(btn, row, col)
         main_layout.addLayout(position_grid)
-
         main_layout.addStretch()
         self.btn_export = QPushButton("导出所有图片")
-        # --- NEW: 连接导出按钮的信号 ---
         self.btn_export.clicked.connect(self.export_images)
         main_layout.addWidget(self.btn_export)
-
         return right_frame
 
-    # --- NEW: 导出功能的核心实现 ---
-    def export_images(self):
-        # 1. 检查是否有图片需要导出
-        if self.image_list_widget.count() == 0:
-            QMessageBox.warning(self, "没有图片", "请先导入图片后再执行导出操作。")
-            return
-
-        # 2. 让用户选择一个输出文件夹
-        output_dir = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
-        if not output_dir: # 如果用户取消了选择
-            return
-
-        # 3. 安全性检查：获取所有输入图片的目录
-        input_dirs = set()
-        for i in range(self.image_list_widget.count()):
-            item_path = self.image_list_widget.item(i).text()
-            input_dirs.add(os.path.dirname(item_path))
-
-        if output_dir in input_dirs:
-            QMessageBox.critical(self, "错误", "不能选择原始图片所在的文件夹作为导出目录，以防覆盖原图！")
-            return
-            
-        # 4. 循环处理并保存每一张图片
-        exported_count = 0
-        for i in range(self.image_list_widget.count()):
-            try:
-                original_path = self.image_list_widget.item(i).text()
-                
-                # 加载原始图片
-                pixmap = QPixmap(original_path)
-                if pixmap.isNull():
-                    continue # 如果加载失败则跳过
-
-                # 应用水印
-                watermarked_pixmap = self.apply_watermark(pixmap)
-                
-                # 构建输出路径 (暂时只支持保留原文件名)
-                base_name = os.path.basename(original_path)
-                # 强制保存为 PNG 格式以支持透明度
-                file_name, _ = os.path.splitext(base_name)
-                output_path = os.path.join(output_dir, f"{file_name}_watermarked.png")
-
-                # 保存文件
-                if watermarked_pixmap.save(output_path, "PNG"):
-                    exported_count += 1
-                else:
-                    print(f"保存失败: {output_path}")
-
-            except Exception as e:
-                print(f"处理文件时发生错误 {original_path}: {e}")
-        
-        # 5. 完成后给用户反馈
-        QMessageBox.information(self, "导出完成", f"成功导出了 {exported_count} 张带水印的图片到:\n{output_dir}")
-
-    # ... 其他所有方法都没有变化 ...
-    # ... (为了简洁，这里省略了其他未改变的方法，请保留你文件中的这些方法) ...
-    def create_left_panel(self):
-        left_frame = QFrame()
-        left_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        layout = QVBoxLayout(left_frame)
-        button_layout = QHBoxLayout()
-        self.btn_import_images = QPushButton("导入图片")
-        self.btn_import_folder = QPushButton("导入文件夹")
-        button_layout.addWidget(self.btn_import_images)
-        button_layout.addWidget(self.btn_import_folder)
-        list_label = QLabel("图片列表")
-        self.image_list_widget = QListWidget()
-        layout.addLayout(button_layout)
-        layout.addWidget(list_label)
-        layout.addWidget(self.image_list_widget)
-        self.btn_import_images.clicked.connect(self.open_image_files)
-        self.btn_import_folder.clicked.connect(self.open_image_folder)
-        self.image_list_widget.currentItemChanged.connect(self.on_current_item_changed)
-        return left_frame
-    def create_center_panel(self):
-        center_frame = QFrame()
-        center_frame.setFrameShape(QFrame.Shape.StyledPanel)
-        layout = QVBoxLayout(center_frame)
-        self.preview_label = QLabel("图片预览区")
-        self.preview_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self.preview_label.setStyleSheet("border: 2px dashed #aaa;")
-        layout.addWidget(self.preview_label)
-        return center_frame
-    def on_text_changed(self, text):
-        self.watermark_text = text
-        self.update_display()
-    def on_font_changed(self, font):
-        self.watermark_font.setFamily(font.family())
-        self.update_display()
-    def on_font_size_changed(self, size):
-        self.watermark_font.setPointSize(size)
-        self.update_display()
+    # ... 其他槽函数无变化 ...
+    def on_text_changed(self, text): self.watermark_text = text; self.update_display()
+    def on_font_changed(self, font): self.watermark_font.setFamily(font.family()); self.update_display()
+    def on_font_size_changed(self, size): self.watermark_font.setPointSize(size); self.update_display()
     def on_color_clicked(self):
         color = QColorDialog.getColor(self.watermark_color, self, "选择水印颜色")
         if color.isValid():
@@ -200,13 +136,8 @@ class MainWindow(QMainWindow):
             self.watermark_color = color
             self.update_color_preview()
             self.update_display()
-    def on_opacity_changed(self, value):
-        self.watermark_color.setAlpha(value)
-        self.update_color_preview()
-        self.update_display()
-    def on_position_changed(self, position):
-        self.watermark_position = position
-        self.update_display()
+    def on_opacity_changed(self, value): self.watermark_color.setAlpha(value); self.update_color_preview(); self.update_display()
+    def on_position_changed(self, position): self.watermark_position = position; self.update_display()
     def update_color_preview(self):
         palette = self.color_preview.palette()
         palette.setColor(self.color_preview.backgroundRole(), self.watermark_color)
@@ -220,6 +151,7 @@ class MainWindow(QMainWindow):
     def open_image_folder(self, *args, **kwargs): print("导入文件夹功能待实现")
     def on_current_item_changed(self, current_item, previous_item):
         if current_item is None:
+            self.preview_label.clear() # clear() is better than setText() here
             self.preview_label.setText("图片预览区")
             self.current_image_path = None
             self.original_pixmap = None
@@ -227,6 +159,7 @@ class MainWindow(QMainWindow):
         self.current_image_path = current_item.text()
         self.original_pixmap = QPixmap(self.current_image_path)
         if self.original_pixmap.isNull():
+            self.preview_label.clear()
             self.preview_label.setText("无法加载图片")
             self.original_pixmap = None
             return
@@ -251,17 +184,52 @@ class MainWindow(QMainWindow):
         painter.drawText(x, y, self.watermark_text)
         painter.end()
         return watermarked_pixmap
+    
+    # --- MODIFIED: 关键修改点 2 ---
     def update_display(self):
         if self.original_pixmap is None: return
+        
+        # 1. 应用水印 (这一步不变)
         pixmap_with_watermark = self.apply_watermark(self.original_pixmap)
-        scaled_pixmap = pixmap_with_watermark.scaled(
-            self.preview_label.size(), Qt.AspectRatioMode.KeepAspectRatio, Qt.TransformationMode.SmoothTransformation
-        )
-        self.preview_label.setPixmap(scaled_pixmap)
-    def resizeEvent(self, event):
-        super().resizeEvent(event)
-        self.update_display()
+        
+        # 2. 直接将完整的、未经缩放的 pixmap 设置给 label
+        #    因为我们设置了 setScaledContents(True)，label 会自动处理缩放
+        self.preview_label.setPixmap(pixmap_with_watermark)
 
+    # --- REMOVED: 关键修改点 3 ---
+    # resizeEvent 不再需要，可以安全删除
+    # def resizeEvent(self, event):
+    #     super().resizeEvent(event)
+    #     self.update_display()
+        
+    def export_images(self):
+        if self.image_list_widget.count() == 0:
+            QMessageBox.warning(self, "没有图片", "请先导入图片后再执行导出操作。")
+            return
+        output_dir = QFileDialog.getExistingDirectory(self, "选择导出文件夹")
+        if not output_dir: return
+        input_dirs = set()
+        for i in range(self.image_list_widget.count()):
+            item_path = self.image_list_widget.item(i).text()
+            input_dirs.add(os.path.dirname(item_path))
+        if output_dir in input_dirs:
+            QMessageBox.critical(self, "错误", "不能选择原始图片所在的文件夹作为导出目录，以防覆盖原图！")
+            return
+        exported_count = 0
+        for i in range(self.image_list_widget.count()):
+            try:
+                original_path = self.image_list_widget.item(i).text()
+                pixmap = QPixmap(original_path)
+                if pixmap.isNull(): continue
+                watermarked_pixmap = self.apply_watermark(pixmap)
+                base_name = os.path.basename(original_path)
+                file_name, _ = os.path.splitext(base_name)
+                output_path = os.path.join(output_dir, f"{file_name}_watermarked.png")
+                if watermarked_pixmap.save(output_path, "PNG"):
+                    exported_count += 1
+                else: print(f"保存失败: {output_path}")
+            except Exception as e: print(f"处理文件时发生错误 {original_path}: {e}")
+        QMessageBox.information(self, "导出完成", f"成功导出了 {exported_count} 张带水印的图片到:\n{output_dir}")
 
 if __name__ == "__main__":
     app = QApplication(sys.argv)
